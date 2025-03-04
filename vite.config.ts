@@ -41,6 +41,9 @@ export default defineConfig({
   define: {
     __TARGET__: JSON.stringify(TARGET),
   },
+  server: {
+    https: false,
+  },
   plugins: [
     comlink(),
     react(),
@@ -71,7 +74,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     host: true,
-    cors: true,
+    cors: false,
+    https: false,
   },
   test: {
     testTimeout: 500,
@@ -80,6 +84,6 @@ export default defineConfig({
     mockReset: true,
     environment: 'jsdom',
     globals: true,
-    include: ['**/*.{test,spec}.?(c|m)[jt]s?(x)']
+    include: ['**/*.{test,spec}.?(c|m)[jt]s?(x)'],
   },
 })

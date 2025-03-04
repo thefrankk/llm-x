@@ -1,4 +1,3 @@
-import { ChatOllama } from '@langchain/ollama'
 import {
   AIMessage,
   HumanMessage,
@@ -6,9 +5,8 @@ import {
   BaseMessage,
   type MessageContentImageUrl,
 } from '@langchain/core/messages'
-import { ChatPromptTemplate } from '@langchain/core/prompts'
-import { StringOutputParser } from '@langchain/core/output_parsers'
 import _ from 'lodash'
+import axios from 'axios'
 
 import CachedStorage from '~/utils/CachedStorage'
 import BaseApi from '~/core/connection/api/BaseApi'
@@ -89,39 +87,160 @@ export class OllamaApi extends BaseApi {
     const parameters = connection.parsedParameters
     await incomingMessageVariant.setExtraDetails({ sentWith: parameters })
 
-    const chatOllama = new ChatOllama({
-      baseUrl: host,
-      model,
-      ...parameters,
+    try {
+      // Format messages for the custom API
+      const formattedMessages = messages.map(message => {
+        const role =
+          message._getType() === 'human'
+            ? 'user'
+            : message._getType() === 'system'
+              ? 'system'
+              : 'assistant'
 
-      callbacks: [
-        {
-          handleLLMEnd(output) {
-            const generationInfo: Record<string, unknown> =
-              _.get(output, 'generations[0][0].generationInfo') || {}
+        return {
+          role,
+          content:
+            typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+        }
+      })
 
-            if (!_.isEmpty(generationInfo)) {
-              incomingMessageVariant.setExtraDetails({
-                sentWith: parameters,
-                returnedWith: generationInfo,
-              })
-            }
-          },
+      // Make request to custom backend instead of Ollama directly
+      const response = await axios({
+        method: 'POST',
+        url: 'http://localhost:5241/api/v1/agentMessage',
+        data: {
+          model,
+          messages: formattedMessages,
+          stream: true,
+          ...parameters,
         },
-      ],
-      // verbose: true,
-    }).bind({ signal: abortController.signal })
+        responseType: 'stream',
+        signal: abortController.signal,
+      })
 
-    const stream = await ChatPromptTemplate.fromMessages(messages)
-      .pipe(chatOllama)
-      .pipe(new StringOutputParser())
-      .stream({})
+      const reader = response.data.getReader()
+      const decoder = new TextDecoder()
 
-    for await (const chunk of stream) {
-      yield chunk
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        yield chunk
+      }
+
+      // Add generation info if available
+      try {
+        const generationInfo = response.headers['x-generation-info']
+        if (generationInfo) {
+          const parsedInfo = JSON.parse(generationInfo)
+          if (!_.isEmpty(parsedInfo)) {
+            incomingMessageVariant.setExtraDetails({
+              sentWith: parameters,
+              returnedWith: parsedInfo,
+            })
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing generation info:', error)
+      }
+    } catch (error) {
+      console.error('Error in custom API call:', error)
+      throw error
+    } finally {
+      delete BaseApi.abortControllerById[incomingMessageVariant.id]
     }
+  }
 
-    delete BaseApi.abortControllerById[incomingMessageVariant.id]
+  /**
+   * Generates chat responses using the backend API instead of directly calling Ollama
+   * @param chatMessages Array of message view models in the chat
+   * @param incomingMessageVariant The incoming message variant to process
+   * @returns AsyncGenerator yielding response chunks
+   */
+  async *generateChatViaBackend(
+    chatMessages: MessageViewModel[],
+    incomingMessageVariant: MessageViewModel,
+  ): AsyncGenerator<string> {
+    const connection = incomingMessageVariant.actor.connection
+    const host = connection?.formattedHost
+
+    const actor = incomingMessageVariant.actor
+    const model = actor.modelName
+
+    if (!connection || !host || !model) return
+
+    const abortController = new AbortController()
+
+    BaseApi.abortControllerById[incomingMessageVariant.id] = async () => abortController.abort()
+
+    const messages = await getMessages(chatMessages, incomingMessageVariant.rootMessage.id)
+    const parameters = connection.parsedParameters
+    await incomingMessageVariant.setExtraDetails({ sentWith: parameters })
+
+    try {
+      // Format messages for the backend API
+      const formattedMessages = messages.map(message => {
+        const role =
+          message._getType() === 'human'
+            ? 'user'
+            : message._getType() === 'system'
+              ? 'system'
+              : 'assistant'
+
+        return {
+          role,
+          content:
+            typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+        }
+      })
+
+      // Make request to backend API endpoint
+      const response = await axios({
+        method: 'POST',
+        url: 'http://localhost:5241/api/v1/chat/agentMessage',
+        data: {
+          model,
+          messages: formattedMessages,
+          stream: true,
+          ...parameters,
+        },
+        responseType: 'stream',
+        signal: abortController.signal,
+      })
+
+      const reader = response.data.getReader()
+      const decoder = new TextDecoder()
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        yield chunk
+      }
+
+      // Add generation info if available
+      try {
+        const generationInfo = response.headers['x-generation-info']
+        if (generationInfo) {
+          const parsedInfo = JSON.parse(generationInfo)
+          if (!_.isEmpty(parsedInfo)) {
+            incomingMessageVariant.setExtraDetails({
+              sentWith: parameters,
+              returnedWith: parsedInfo,
+            })
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing generation info:', error)
+      }
+    } catch (error) {
+      console.error('Error in backend API call:', error)
+      throw error
+    } finally {
+      delete BaseApi.abortControllerById[incomingMessageVariant.id]
+    }
   }
 
   generateImages(): Promise<string[]> {
