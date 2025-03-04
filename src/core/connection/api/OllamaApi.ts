@@ -198,7 +198,7 @@ export class OllamaApi extends BaseApi {
       // Make request to backend API endpoint
       const response = await axios({
         method: 'POST',
-        url: 'http://localhost:5241/api/v1/chat/agentMessage',
+        url: 'http://10.0.0.63:5241/api/v1/chat/agentMessage',
         data: {
           model,
           messages: formattedMessages,
