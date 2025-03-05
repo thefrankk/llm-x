@@ -154,8 +154,6 @@ export class OllamaApi extends BaseApi {
       delete BaseApi.abortControllerById[incomingMessageVariant.id]
     }
   }
-}
-
 
   /**
    * Generates chat responses using the backend API instead of directly calling Ollama
