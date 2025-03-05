@@ -93,8 +93,6 @@ export class OllamaApi extends BaseApi {
     const chatOllama = new ChatOllama({
       baseUrl: 'http://10.0.0.63:5241/api/v1/agentMessage',
       model,
-      ...parameters,
-
       callbacks: [
         {
           handleLLMEnd(output) {
