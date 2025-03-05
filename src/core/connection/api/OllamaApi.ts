@@ -80,7 +80,6 @@ export class OllamaApi extends BaseApi {
     if (!connection || !host || !model) return
 
     const abortController = new AbortController()
-
     BaseApi.abortControllerById[incomingMessageVariant.id] = async () => abortController.abort()
 
     const messages = await getMessages(chatMessages, incomingMessageVariant.rootMessage.id)
@@ -104,22 +103,25 @@ export class OllamaApi extends BaseApi {
         }
       })
 
-      // Make request to custom backend instead of Ollama directly
-      const response = await axios({
+      // ✅ Use fetch() instead of axios for proper streaming support
+      const response = await fetch('http://10.0.0.63:5241/api/v1/agentMessage', {
         method: 'POST',
-        // url: 'http://10.0.0.63:5241/api/v1/agentMessage',
-        url: 'http://10.0.0.38:11434/api/chat',
-        data: {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           model,
           messages: formattedMessages,
           stream: true,
           ...parameters,
-        },
-        responseType: 'stream',
+        }),
         signal: abortController.signal,
       })
 
-      const reader = response.data.getReader()
+      if (!response.ok) {
+        throw new Error(`API request failed with status: ${response.status}`)
+      }
+
+      // ✅ Use response.body.getReader() for streaming
+      const reader = response.body!.getReader()
       const decoder = new TextDecoder()
 
       while (true) {
@@ -130,12 +132,12 @@ export class OllamaApi extends BaseApi {
         yield chunk
       }
 
-      // Add generation info if available
+      // ✅ Extract generation info from headers (if available)
       try {
-        const generationInfo = response.headers['x-generation-info']
+        const generationInfo = response.headers.get('x-generation-info')
         if (generationInfo) {
           const parsedInfo = JSON.parse(generationInfo)
-          if (!_.isEmpty(parsedInfo)) {
+          if (parsedInfo && Object.keys(parsedInfo).length > 0) {
             incomingMessageVariant.setExtraDetails({
               sentWith: parameters,
               returnedWith: parsedInfo,
@@ -152,6 +154,8 @@ export class OllamaApi extends BaseApi {
       delete BaseApi.abortControllerById[incomingMessageVariant.id]
     }
   }
+}
+
 
   /**
    * Generates chat responses using the backend API instead of directly calling Ollama
