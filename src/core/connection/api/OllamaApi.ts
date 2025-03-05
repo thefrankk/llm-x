@@ -111,6 +111,8 @@ export class OllamaApi extends BaseApi {
       // verbose: true,
     }).bind({ signal: abortController.signal })
 
+    console.log(`Sending request to: ${chatOllama}`)
+
     const stream = await ChatPromptTemplate.fromMessages(messages)
       .pipe(chatOllama)
       .pipe(new StringOutputParser())
