@@ -7,11 +7,14 @@ import {
 } from '@langchain/core/messages'
 import _ from 'lodash'
 import axios from 'axios'
+import { ChatOllama } from '@langchain/ollama'
 
 import CachedStorage from '~/utils/CachedStorage'
 import BaseApi from '~/core/connection/api/BaseApi'
 import { MessageViewModel } from '~/core/message/MessageViewModel'
 import { personaStore } from '~/core/persona/PersonaStore'
+import { ChatPromptTemplate } from '@langchain/core/prompts'
+import { StringOutputParser } from '@langchain/core/output_parsers'
 
 const createHumanMessage = async (message: MessageViewModel): Promise<HumanMessage> => {
   if (!_.isEmpty(message.source.imageUrls)) {
@@ -80,79 +83,46 @@ export class OllamaApi extends BaseApi {
     if (!connection || !host || !model) return
 
     const abortController = new AbortController()
+
     BaseApi.abortControllerById[incomingMessageVariant.id] = async () => abortController.abort()
 
     const messages = await getMessages(chatMessages, incomingMessageVariant.rootMessage.id)
     const parameters = connection.parsedParameters
     await incomingMessageVariant.setExtraDetails({ sentWith: parameters })
 
-    try {
-      // Format messages for the custom API
-      const formattedMessages = messages.map(message => {
-        const role =
-          message._getType() === 'human'
-            ? 'user'
-            : message._getType() === 'system'
-              ? 'system'
-              : 'assistant'
+    const chatOllama = new ChatOllama({
+      baseUrl: host,
+      model,
+      ...parameters,
 
-        return {
-          role,
-          content:
-            typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
-        }
-      })
+      callbacks: [
+        {
+          handleLLMEnd(output) {
+            const generationInfo: Record<string, unknown> =
+              _.get(output, 'generations[0][0].generationInfo') || {}
 
-      // ✅ Use fetch() instead of axios for proper streaming support
-      const response = await fetch('http://10.0.0.63:5241/api/v1/agentMessage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: formattedMessages,
-          stream: true,
-          ...parameters,
-        }),
-        signal: abortController.signal,
-      })
+            if (!_.isEmpty(generationInfo)) {
+              incomingMessageVariant.setExtraDetails({
+                sentWith: parameters,
+                returnedWith: generationInfo,
+              })
+            }
+          },
+        },
+      ],
+      // verbose: true,
+    }).bind({ signal: abortController.signal })
 
-      if (!response.ok) {
-        throw new Error(`API request failed with status: ${response.status}`)
-      }
+    const stream = await ChatPromptTemplate.fromMessages(messages)
+      .pipe(chatOllama)
+      .pipe(new StringOutputParser())
+      .stream({})
 
-      // ✅ Use response.body.getReader() for streaming
-      const reader = response.body!.getReader()
-      const decoder = new TextDecoder()
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const chunk = decoder.decode(value, { stream: true })
-        yield chunk
-      }
-
-      // ✅ Extract generation info from headers (if available)
-      try {
-        const generationInfo = response.headers.get('x-generation-info')
-        if (generationInfo) {
-          const parsedInfo = JSON.parse(generationInfo)
-          if (parsedInfo && Object.keys(parsedInfo).length > 0) {
-            incomingMessageVariant.setExtraDetails({
-              sentWith: parameters,
-              returnedWith: parsedInfo,
-            })
-          }
-        }
-      } catch (error) {
-        console.error('Error parsing generation info:', error)
-      }
-    } catch (error) {
-      console.error('Error in custom API call:', error)
-      throw error
-    } finally {
-      delete BaseApi.abortControllerById[incomingMessageVariant.id]
+    for await (const chunk of stream) {
+      yield chunk
     }
+
+    delete BaseApi.abortControllerById[incomingMessageVariant.id]
   }
 
   /**
