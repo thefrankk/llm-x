@@ -91,7 +91,7 @@ export class OllamaApi extends BaseApi {
     await incomingMessageVariant.setExtraDetails({ sentWith: parameters })
 
     const chatOllama = new ChatOllama({
-      baseUrl: host,
+      baseUrl: 'http://10.0.0.63:5241/api/v1/agentMessage',
       model,
       ...parameters,
 
