@@ -91,8 +91,10 @@ export class OllamaApi extends BaseApi {
     await incomingMessageVariant.setExtraDetails({ sentWith: parameters })
 
     const chatOllama = new ChatOllama({
-      baseUrl: 'http://10.0.0.63:5241/api/v1/agentMessage',
+      baseUrl: 'http://10.0.0.63:5241/v1/agentMessage',
       model,
+      ...parameters,
+
       callbacks: [
         {
           handleLLMEnd(output) {
@@ -110,8 +112,6 @@ export class OllamaApi extends BaseApi {
       ],
       // verbose: true,
     }).bind({ signal: abortController.signal })
-
-    console.log(`Sending request to: ${chatOllama}`)
 
     const stream = await ChatPromptTemplate.fromMessages(messages)
       .pipe(chatOllama)
